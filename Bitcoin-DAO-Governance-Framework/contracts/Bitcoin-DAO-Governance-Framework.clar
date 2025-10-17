@@ -432,3 +432,91 @@
     (ok true)
   )
 )
+
+;; Community Fund Functions
+(define-public (submit-fund-request
+  (requested-amount uint)
+  (category (string-ascii 50))
+  (milestones (list 5 {
+    description: (string-ascii 100),
+    amount: uint,
+    completed: bool
+  }))
+)
+  (let (
+    (fund-id (var-get next-fund-id))
+    (params (get-governance-parameters))
+    (voter-profile (unwrap! (map-get? voter-profiles { voter: tx-sender }) ERR_NOT_ACTIVE_MEMBER))
+    (tier-voting-threshold (default-to u10 
+      (get value (map-get? governance-parameters { param-name: "fund-request-votes-needed" }))))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (>= (get reputation-score voter-profile) u50) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (> requested-amount u0) ERR_ZERO_VOTE_POWER)
+    
+    ;; Create fund request
+    (map-set community-fund-proposals
+      { fund-id: fund-id }
+      {
+        applicant: tx-sender,
+        requested-amount: requested-amount,
+        category: category,
+        milestones: milestones,
+        approved: false,
+        votes-needed: tier-voting-threshold,
+        votes-received: u0,
+        proposal-id: u0
+      }
+    )
+    
+    ;; Increment fund ID counter
+    (var-set next-fund-id (+ fund-id u1))
+    
+    (ok fund-id)
+  )
+)
+
+
+(define-public (vote-on-fund-request (fund-id uint) (support bool))
+  (let (
+    (fund-proposal (unwrap! (map-get? community-fund-proposals { fund-id: fund-id })
+                           ERR_INVALID_PROPOSAL))
+    (voter-profile (unwrap! (map-get? voter-profiles { voter: tx-sender }) 
+                           ERR_NOT_ACTIVE_MEMBER))
+    (voting-power (+ (get base-voting-power voter-profile) 
+                     (get delegated-voting-power voter-profile)))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (> voting-power u0) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (not (get approved fund-proposal)) ERR_VOTING_CLOSED)
+    
+    ;; If supporting, add to votes received
+    (if support
+      (map-set community-fund-proposals
+        { fund-id: fund-id }
+        (merge fund-proposal {
+          votes-received: (+ (get votes-received fund-proposal) u1)
+        })
+      )
+      true
+    )
+    
+    ;; Check if fund request is now approved
+    (let (
+      (updated-fund (unwrap-panic (map-get? community-fund-proposals { fund-id: fund-id })))
+    )
+      (if (and (not (get approved updated-fund))
+               (>= (get votes-received updated-fund) (get votes-needed updated-fund)))
+        (map-set community-fund-proposals
+          { fund-id: fund-id }
+          (merge updated-fund {
+            approved: true
+          })
+        )
+        true
+      )
+    )
+    
+    (ok support)
+  )
+)
