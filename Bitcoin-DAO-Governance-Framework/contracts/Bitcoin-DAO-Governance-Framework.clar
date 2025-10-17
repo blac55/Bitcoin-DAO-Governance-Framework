@@ -72,4 +72,66 @@
   }
 )
 
+;; Treasury Management
+(define-map treasury-accounts
+  {
+    account: principal
+  }
+  {
+    balance: uint,
+    allowed-categories: (list 5 (string-ascii 50)),
+    last-withdrawal-block: uint
+  }
+)
+
+;; Advanced Voting and Delegation Mechanisms
+(define-map proposal-votes
+  {
+    proposal-id: uint,
+    voter: principal
+  }
+  {
+    vote-power: uint,
+    vote-direction: bool,
+    voted-at-block: uint,
+    quadratic-weight: uint,
+    specialized-category-votes: (list 5 { 
+      category: (string-ascii 50), 
+      vote-weight: uint 
+    })
+  }
+)
+
+;; Governance Parameters Management
+(define-map governance-parameters
+  {
+    param-name: (string-ascii 50)
+  }
+  {
+    value: uint,
+    last-updated-block: uint,
+    update-cooldown: uint
+  }
+)
+
+;; Contract Upgrade Mechanism
+(define-map contract-upgrades
+  {
+    upgrade-id: uint
+  }
+  {
+    new-contract-address: principal,
+    proposed-by: principal,
+    upgrade-block: uint,
+    approved: bool,
+    implementation-details: (optional (string-ascii 500))
+  }
+)
+
+;; Emergency and Governance Controls
+(define-data-var emergency-stop-activated bool false)
+(define-data-var governance-pause-threshold uint u3)
+(define-data-var total-governance-tokens uint u0)
+(define-data-var next-proposal-id uint u0)
+(define-data-var next-upgrade-id uint u0)
 
