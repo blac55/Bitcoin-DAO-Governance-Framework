@@ -317,3 +317,206 @@
   }
 )
 
+(define-data-var staking-rewards-rate uint u5) ;; 5 basis points per block
+(define-data-var staking-rewards-pool uint u0)
+
+;; Community Treasury and Grants
+(define-map community-fund-proposals
+  {
+    fund-id: uint
+  }
+  {
+    applicant: principal,
+    requested-amount: uint,
+    category: (string-ascii 50),
+    milestones: (list 5 {
+      description: (string-ascii 100),
+      amount: uint,
+      completed: bool
+    }),
+    approved: bool,
+    votes-needed: uint,
+    votes-received: uint,
+    proposal-id: uint
+  }
+)
+
+(define-data-var next-fund-id uint u0)
+(define-data-var community-treasury-balance uint u0)
+
+;; Multi-signature Transaction System
+(define-map multisig-transactions
+  {
+    transaction-id: uint
+  }
+  {
+    creator: principal,
+    contract-to-call: principal,
+    function-to-call: (string-ascii 128),
+    function-args: (list 10 (buff 256)),
+    required-signatures: uint,
+    signers: (list 10 principal),
+    executed: bool,
+    created-at-block: uint,
+    expiration-block: uint
+  }
+)
+
+(define-data-var next-transaction-id uint u0)
+
+;; Reputation and Governance Tiers
+(define-map governance-tiers
+  {
+    tier-level: uint
+  }
+  {
+    name: (string-ascii 50),
+    min-reputation: uint,
+    voting-power-multiplier: uint,
+    proposal-discount: uint,
+    special-rights: (list 5 (string-ascii 50))
+  }
+)
+
+;; Protocol Cooldown System
+(define-map protocol-actions
+  {
+    action-type: (string-ascii 50)
+  }
+  {
+    last-executed: uint,
+    cooldown-period: uint,
+    calls-in-period: uint,
+    max-calls-in-period: uint
+  }
+)
+
+;; Quadratic Voting Implementation
+(define-private (calculate-quadratic-vote-power (base-power uint))
+  (let (
+    (sqrt-power (sqrti base-power))
+  )
+    sqrt-power
+  )
+)
+
+(define-public (unstake-tokens (amount uint))
+  (let (
+    (staking-position (unwrap! (map-get? staking-positions { staker: tx-sender }) 
+                               ERR_NOT_ACTIVE_MEMBER))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (<= amount (get amount staking-position)) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (<= stacks-block-height (get locked-until-block staking-position)) 
+              ERR_STAKING_PERIOD_ACTIVE)
+    
+    (map-set staking-positions
+      { staker: tx-sender }
+      (merge staking-position {
+        amount: (- (get amount staking-position) amount)
+      })
+    )
+    
+    ;; Update voter profile
+    (let (
+      (voter-profile (unwrap-panic (map-get? voter-profiles { voter: tx-sender })))
+    )
+      (map-set voter-profiles
+        { voter: tx-sender }
+        (merge voter-profile {
+          base-voting-power: (- (get base-voting-power voter-profile) amount)
+        })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Community Fund Functions
+(define-public (submit-fund-request
+  (requested-amount uint)
+  (category (string-ascii 50))
+  (milestones (list 5 {
+    description: (string-ascii 100),
+    amount: uint,
+    completed: bool
+  }))
+)
+  (let (
+    (fund-id (var-get next-fund-id))
+    (params (get-governance-parameters))
+    (voter-profile (unwrap! (map-get? voter-profiles { voter: tx-sender }) ERR_NOT_ACTIVE_MEMBER))
+    (tier-voting-threshold (default-to u10 
+      (get value (map-get? governance-parameters { param-name: "fund-request-votes-needed" }))))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (>= (get reputation-score voter-profile) u50) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (> requested-amount u0) ERR_ZERO_VOTE_POWER)
+    
+    ;; Create fund request
+    (map-set community-fund-proposals
+      { fund-id: fund-id }
+      {
+        applicant: tx-sender,
+        requested-amount: requested-amount,
+        category: category,
+        milestones: milestones,
+        approved: false,
+        votes-needed: tier-voting-threshold,
+        votes-received: u0,
+        proposal-id: u0
+      }
+    )
+    
+    ;; Increment fund ID counter
+    (var-set next-fund-id (+ fund-id u1))
+    
+    (ok fund-id)
+  )
+)
+
+
+(define-public (vote-on-fund-request (fund-id uint) (support bool))
+  (let (
+    (fund-proposal (unwrap! (map-get? community-fund-proposals { fund-id: fund-id })
+                           ERR_INVALID_PROPOSAL))
+    (voter-profile (unwrap! (map-get? voter-profiles { voter: tx-sender }) 
+                           ERR_NOT_ACTIVE_MEMBER))
+    (voting-power (+ (get base-voting-power voter-profile) 
+                     (get delegated-voting-power voter-profile)))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (> voting-power u0) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (not (get approved fund-proposal)) ERR_VOTING_CLOSED)
+    
+    ;; If supporting, add to votes received
+    (if support
+      (map-set community-fund-proposals
+        { fund-id: fund-id }
+        (merge fund-proposal {
+          votes-received: (+ (get votes-received fund-proposal) u1)
+        })
+      )
+      true
+    )
+    
+    ;; Check if fund request is now approved
+    (let (
+      (updated-fund (unwrap-panic (map-get? community-fund-proposals { fund-id: fund-id })))
+    )
+      (if (and (not (get approved updated-fund))
+               (>= (get votes-received updated-fund) (get votes-needed updated-fund)))
+        (map-set community-fund-proposals
+          { fund-id: fund-id }
+          (merge updated-fund {
+            approved: true
+          })
+        )
+        true
+      )
+    )
+    
+    (ok support)
+  )
+)
