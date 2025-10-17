@@ -361,3 +361,74 @@
     expiration-block: uint
   }
 )
+
+(define-data-var next-transaction-id uint u0)
+
+;; Reputation and Governance Tiers
+(define-map governance-tiers
+  {
+    tier-level: uint
+  }
+  {
+    name: (string-ascii 50),
+    min-reputation: uint,
+    voting-power-multiplier: uint,
+    proposal-discount: uint,
+    special-rights: (list 5 (string-ascii 50))
+  }
+)
+
+;; Protocol Cooldown System
+(define-map protocol-actions
+  {
+    action-type: (string-ascii 50)
+  }
+  {
+    last-executed: uint,
+    cooldown-period: uint,
+    calls-in-period: uint,
+    max-calls-in-period: uint
+  }
+)
+
+;; Quadratic Voting Implementation
+(define-private (calculate-quadratic-vote-power (base-power uint))
+  (let (
+    (sqrt-power (sqrti base-power))
+  )
+    sqrt-power
+  )
+)
+
+(define-public (unstake-tokens (amount uint))
+  (let (
+    (staking-position (unwrap! (map-get? staking-positions { staker: tx-sender }) 
+                               ERR_NOT_ACTIVE_MEMBER))
+  )
+    (asserts! (not (var-get emergency-stop-activated)) ERR_EMERGENCY_STOP)
+    (asserts! (<= amount (get amount staking-position)) ERR_INSUFFICIENT_VOTING_POWER)
+    (asserts! (<= stacks-block-height (get locked-until-block staking-position)) 
+              ERR_STAKING_PERIOD_ACTIVE)
+    
+    (map-set staking-positions
+      { staker: tx-sender }
+      (merge staking-position {
+        amount: (- (get amount staking-position) amount)
+      })
+    )
+    
+    ;; Update voter profile
+    (let (
+      (voter-profile (unwrap-panic (map-get? voter-profiles { voter: tx-sender })))
+    )
+      (map-set voter-profiles
+        { voter: tx-sender }
+        (merge voter-profile {
+          base-voting-power: (- (get base-voting-power voter-profile) amount)
+        })
+      )
+    )
+    
+    (ok true)
+  )
+)
